@@ -1,6 +1,6 @@
 /*
  * Solo - A small and beautiful blogging system written in Java.
- * Copyright (c) 2010-2018, b3log.org & hacpai.com
+ * Copyright (c) 2010-present, b3log.org
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -20,7 +20,7 @@
  *
  * @author <a href="http://vanessa.b3log.org">Liyuan Li</a>
  * @author <a href="http://88250.b3log.org">Liang Ding</a>
- * @version 1.1.2.1, Apr 5, 2018
+ * @version 1.2.0.0, Apr 28, 2019
  * @since 2.0.0
  */
 
@@ -60,16 +60,9 @@ admin.categoryList = {
         this.tablePagination.initPagination();
         this.getList(page);
 
-        $("#categoryUpdate").dialog({
-            width: 700,
-            height: 358,
-            "modal": true,
-            "hideFooter": true
-        });
-
         // For tag auto-completion
         $.ajax({// Gets all tags
-            url: latkeConfig.servePath + "/console/tags",
+            url: Label.servePath + "/console/tags",
             type: "GET",
             cache: false,
             success: function (result, textStatus) {
@@ -109,7 +102,7 @@ admin.categoryList = {
         var that = this;
 
         $.ajax({
-            url: latkeConfig.servePath + "/console/categories/" + pageNum + "/" + Label.PAGE_SIZE + "/" + Label.WINDOW_SIZE,
+            url: Label.servePath + "/console/categories/" + pageNum + "/" + Label.PAGE_SIZE + "/" + Label.WINDOW_SIZE,
             type: "GET",
             cache: false,
             success: function(result, textStatus) {
@@ -152,7 +145,7 @@ admin.categoryList = {
                     categoryData[i].expendRow = "<a href='javascript:void(0)' onclick=\"admin.categoryList.get('" +
                             categories[i].oId + "')\">" + Label.updateLabel + "</a>\
                             <a href='javascript:void(0)' onclick=\"admin.categoryList.del('" + categories[i].oId + "', '" +
-                            categories[i].categoryTitle + "')\">" + Label.removeLabel + "</a> ";
+                            encodeURIComponent(categories[i].categoryTitle) + "')\">" + Label.removeLabel + "</a> ";
 
                 }
                 that.tablePagination.updateTablePagination(categoryData, pageNum, result.pagination);
@@ -175,9 +168,16 @@ admin.categoryList = {
                 "categoryDescription": $("#categoryDesc").val()
             };
 
+            var oId = $("#categoryName").data("oId");
+            var type = "POST"
+            if (oId) {
+              requestJSONObject.oId = oId
+              type = "PUT"
+            }
+
             $.ajax({
-                url: latkeConfig.servePath + "/console/category/",
-                type: "POST",
+                url: Label.servePath + "/console/category/",
+                type: type,
                 cache: false,
                 data: JSON.stringify(requestJSONObject),
                 success: function(result, textStatus) {
@@ -187,18 +187,21 @@ admin.categoryList = {
                         return;
                     }
 
-                    $("#categoryName").val("");
+                    if (!oId) {
+                      if (admin.categoryList.pageInfo.currentCount === Label.PAGE_SIZE &&
+                        admin.categoryList.pageInfo.currentPage === admin.categoryList.pageInfo.pageCount) {
+                        admin.categoryList.pageInfo.pageCount++;
+                      }
+                      var hashList = window.location.hash.split("/");
+                      if (admin.categoryList.pageInfo.pageCount !== parseInt(hashList[hashList.length - 1])) {
+                        admin.setHashByPage(admin.categoryList.pageInfo.pageCount);
+                      }
+                    }
+
+                    $("#categoryName").val("").data("oId", '');
                     $("#categoryTags").val("");
                     $("#categoryURI").val("");
                     $("#categoryDesc").val("");
-                    if (admin.categoryList.pageInfo.currentCount === Label.PAGE_SIZE &&
-                            admin.categoryList.pageInfo.currentPage === admin.categoryList.pageInfo.pageCount) {
-                        admin.categoryList.pageInfo.pageCount++;
-                    }
-                    var hashList = window.location.hash.split("/");
-                    if (admin.categoryList.pageInfo.pageCount !== parseInt(hashList[hashList.length - 1])) {
-                        admin.setHashByPage(admin.categoryList.pageInfo.pageCount);
-                    }
 
                     admin.categoryList.getList(admin.categoryList.pageInfo.pageCount);
 
@@ -214,10 +217,9 @@ admin.categoryList = {
     get: function(id) {
         $("#loadMsg").text(Label.loadingLabel);
         $("#tipMsg").text("");
-        $("#categoryUpdate").dialog("open");
 
         $.ajax({
-            url: latkeConfig.servePath + "/console/category/" + id,
+            url: Label.servePath + "/console/category/" + id,
             type: "GET",
             cache: false,
             success: function(result, textStatus) {
@@ -227,50 +229,14 @@ admin.categoryList = {
                     return;
                 }
 
-                $("#categoryNameUpdate").val(result.categoryTitle).data("oId", id);
-                $("#categoryURIUpdate").val(result.categoryURI);
-                $("#categoryDescUpdate").val(result.categoryDescription);
-                $("#categoryTagsUpdate").val(result.categoryTags);
+                $("#categoryName").val(result.categoryTitle).data("oId", id);
+                $("#categoryURI").val(result.categoryURI);
+                $("#categoryDesc").val(result.categoryDescription);
+                $("#categoryTags").val(result.categoryTags);
 
                 $("#loadMsg").text("");
             }
         });
-    },
-    /*
-     * 更新分类
-     */
-    update: function() {
-        if (this.validate("Update")) {
-            $("#loadMsg").text(Label.loadingLabel);
-            $("#tipMsg").text("");
-
-            var requestJSONObject = {
-                "categoryTitle": $("#categoryNameUpdate").val(),
-                "oId": $("#categoryNameUpdate").data("oId"),
-                "categoryTags": $("#categoryTagsUpdate").val(),
-                "categoryURI": $("#categoryURIUpdate").val(),
-                "categoryDescription": $("#categoryDescUpdate").val()
-            };
-
-            $.ajax({
-                url: latkeConfig.servePath + "/console/category/",
-                type: "PUT",
-                cache: false,
-                data: JSON.stringify(requestJSONObject),
-                success: function(result, textStatus) {
-                    $("#categoryUpdate").dialog("close");
-                    $("#tipMsg").text(result.msg);
-                    if (!result.sc) {
-                        $("#loadMsg").text("");
-                        return;
-                    }
-
-                    admin.categoryList.getList(admin.categoryList.pageInfo.currentPage);
-
-                    $("#loadMsg").text("");
-                }
-            });
-        }
     },
     /*
      * 删除分类
@@ -278,13 +244,13 @@ admin.categoryList = {
      * @categoryName 分类名称
      */
     del: function(id, categoryName) {
-        var isDelete = confirm(Label.confirmRemoveLabel + Label.categoryLabel + '"' + categoryName + '"?');
+        var isDelete = confirm(Label.confirmRemoveLabel + Label.categoryLabel + '"' + Util.htmlDecode(categoryName) + '"?');
         if (isDelete) {
             $("#loadMsg").text(Label.loadingLabel);
             $("#tipMsg").text("");
 
             $.ajax({
-                url: latkeConfig.servePath + "/console/category/" + id,
+                url: Label.servePath + "/console/category/" + id,
                 type: "DELETE",
                 cache: false,
                 success: function(result, textStatus) {
@@ -344,7 +310,7 @@ admin.categoryList = {
         };
 
         $.ajax({
-            url: latkeConfig.servePath + "/console/category/order/",
+            url: Label.servePath + "/console/category/order/",
             type: "PUT",
             cache: false,
             data: JSON.stringify(requestJSONObject),

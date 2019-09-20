@@ -1,6 +1,6 @@
 /*
  * Solo - A small and beautiful blogging system written in Java.
- * Copyright (c) 2010-2018, b3log.org & hacpai.com
+ * Copyright (c) 2010-present, b3log.org
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -18,26 +18,25 @@
 package org.b3log.solo.processor;
 
 import org.b3log.latke.Keys;
-import org.b3log.latke.Latkes;
-import org.b3log.latke.ioc.inject.Inject;
+import org.b3log.latke.ioc.Inject;
 import org.b3log.latke.logging.Level;
 import org.b3log.latke.logging.Logger;
 import org.b3log.latke.model.Pagination;
 import org.b3log.latke.service.LangPropsService;
 import org.b3log.latke.service.ServiceException;
-import org.b3log.latke.servlet.HTTPRequestContext;
-import org.b3log.latke.servlet.HTTPRequestMethod;
+import org.b3log.latke.servlet.HttpMethod;
+import org.b3log.latke.servlet.RequestContext;
 import org.b3log.latke.servlet.annotation.RequestProcessing;
 import org.b3log.latke.servlet.annotation.RequestProcessor;
-import org.b3log.latke.servlet.renderer.freemarker.AbstractFreeMarkerRenderer;
-import org.b3log.latke.util.Requests;
-import org.b3log.latke.util.Strings;
+import org.b3log.latke.servlet.renderer.AbstractFreeMarkerRenderer;
+import org.b3log.latke.servlet.renderer.JsonRenderer;
+import org.b3log.latke.util.Paginator;
+import org.b3log.latke.util.Stopwatchs;
+import org.b3log.latke.util.URLs;
 import org.b3log.solo.model.Article;
 import org.b3log.solo.model.Category;
 import org.b3log.solo.model.Common;
 import org.b3log.solo.model.Option;
-import org.b3log.solo.processor.renderer.SkinRenderer;
-import org.b3log.solo.processor.util.Filler;
 import org.b3log.solo.service.*;
 import org.b3log.solo.util.Skins;
 import org.json.JSONException;
@@ -45,9 +44,6 @@ import org.json.JSONObject;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.io.IOException;
-import java.net.URLDecoder;
-import java.net.URLEncoder;
 import java.util.List;
 import java.util.Map;
 
@@ -55,7 +51,7 @@ import java.util.Map;
  * Category processor.
  *
  * @author <a href="http://88250.b3log.org">Liang Ding</a>
- * @version 1.0.1.3, Jun 22, 2018
+ * @version 1.1.0.0, Mar 30, 2019
  * @since 2.0.0
  */
 @RequestProcessor
@@ -67,10 +63,10 @@ public class CategoryProcessor {
     private static final Logger LOGGER = Logger.getLogger(CategoryProcessor.class);
 
     /**
-     * Filler.
+     * DataModelService.
      */
     @Inject
-    private Filler filler;
+    private DataModelService dataModelService;
 
     /**
      * Language service.
@@ -79,10 +75,10 @@ public class CategoryProcessor {
     private LangPropsService langPropsService;
 
     /**
-     * Preference query service.
+     * Option query service.
      */
     @Inject
-    private PreferenceQueryService preferenceQueryService;
+    private OptionQueryService optionQueryService;
 
     /**
      * Article query service.
@@ -109,125 +105,111 @@ public class CategoryProcessor {
     private StatisticMgmtService statisticMgmtService;
 
     /**
-     * Gets the request page number from the specified request URI and category URI.
+     * Gets category articles paged with the specified context.
      *
-     * @param requestURI  the specified request URI
-     * @param categoryURI the specified category URI
-     * @return page number, returns {@code -1} if the specified request URI can not convert to an number
+     * @param context the specified context
      */
-    private static int getCurrentPageNum(final String requestURI, final String categoryURI) {
-        if (Strings.isEmptyOrNull(categoryURI)) {
-            return -1;
+    @RequestProcessing(value = "/articles/category/{categoryURI}", method = HttpMethod.GET)
+    public void getCategoryArticlesByPage(final RequestContext context) {
+        final JSONObject jsonObject = new JSONObject();
+
+        final HttpServletRequest request = context.getRequest();
+        final String categoryURI = context.pathVar("categoryURI");
+        final int currentPageNum = Paginator.getPage(request);
+
+        Stopwatchs.start("Get Category-Articles Paged [categoryURI=" + categoryURI + ", pageNum=" + currentPageNum + ']');
+        try {
+            final JSONObject category = categoryQueryService.getByURI(categoryURI);
+            if (null == category) {
+                context.sendError(HttpServletResponse.SC_NOT_FOUND);
+
+                return;
+            }
+
+            jsonObject.put(Keys.STATUS_CODE, true);
+            final String categoryId = category.optString(Keys.OBJECT_ID);
+            final JSONObject preference = optionQueryService.getPreference();
+            final int pageSize = preference.getInt(Option.ID_C_ARTICLE_LIST_DISPLAY_COUNT);
+            final JSONObject articlesResult = articleQueryService.getCategoryArticles(categoryId, currentPageNum, pageSize);
+            final List<JSONObject> articles = (List<JSONObject>) articlesResult.opt(Keys.RESULTS);
+            dataModelService.setArticlesExProperties(context, articles, preference);
+            final int pageCount = articlesResult.optJSONObject(Pagination.PAGINATION).optInt(Pagination.PAGINATION_PAGE_COUNT);
+
+            final JSONObject result = new JSONObject();
+            final JSONObject pagination = new JSONObject();
+            pagination.put(Pagination.PAGINATION_PAGE_COUNT, pageCount);
+            result.put(Pagination.PAGINATION, pagination);
+            result.put(Article.ARTICLES, articles);
+            jsonObject.put(Keys.RESULTS, result);
+        } catch (final Exception e) {
+            jsonObject.put(Keys.STATUS_CODE, false);
+            LOGGER.log(Level.ERROR, "Gets article paged failed", e);
+        } finally {
+            Stopwatchs.end();
         }
 
-        final String pageNumString = requestURI.substring((Latkes.getContextPath() + "/category/" + categoryURI + "/").length());
-
-        return Requests.getCurrentPageNum(pageNumString);
-    }
-
-    /**
-     * Gets category URI from the specified URI.
-     *
-     * @param requestURI the specified request URI
-     * @return category URI
-     */
-    private static String getCategoryURI(final String requestURI) {
-        final String path = requestURI.substring((Latkes.getContextPath() + "/category/").length());
-
-        if (path.contains("/")) {
-            return path.substring(0, path.indexOf("/"));
-        } else {
-            return path.substring(0);
-        }
+        final JsonRenderer renderer = new JsonRenderer();
+        context.setRenderer(renderer);
+        renderer.setJSONObject(jsonObject);
     }
 
     /**
      * Shows articles related with a category with the specified context.
      *
      * @param context the specified context
-     * @throws IOException io exception
      */
-    @RequestProcessing(value = "/category/**", method = HTTPRequestMethod.GET)
-    public void showCategoryArticles(final HTTPRequestContext context) throws IOException {
-        final AbstractFreeMarkerRenderer renderer = new SkinRenderer(context.getRequest());
-        context.setRenderer(renderer);
-        renderer.setTemplateName("category-articles.ftl");
+    @RequestProcessing(value = "/category/{categoryURI}", method = HttpMethod.GET)
+    public void showCategoryArticles(final RequestContext context) {
+        final AbstractFreeMarkerRenderer renderer = new SkinRenderer(context, "category-articles.ftl");
         final Map<String, Object> dataModel = renderer.getDataModel();
 
         final HttpServletRequest request = context.getRequest();
         final HttpServletResponse response = context.getResponse();
 
         try {
-            String requestURI = request.getRequestURI();
-            if (!requestURI.endsWith("/")) {
-                requestURI += "/";
-            }
-
-            String categoryURI = getCategoryURI(requestURI);
-            final int currentPageNum = getCurrentPageNum(requestURI, categoryURI);
-            if (-1 == currentPageNum) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND);
-
-                return;
-            }
-
+            String categoryURI = context.pathVar("categoryURI");
+            categoryURI = URLs.encode(categoryURI);
+            final int currentPageNum = Paginator.getPage(request);
             LOGGER.log(Level.DEBUG, "Category [URI={0}, currentPageNum={1}]", categoryURI, currentPageNum);
-
-            categoryURI = URLDecoder.decode(categoryURI, "UTF-8");
             final JSONObject category = categoryQueryService.getByURI(categoryURI);
-
             if (null == category) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND);
+                context.sendError(HttpServletResponse.SC_NOT_FOUND);
 
                 return;
             }
 
             dataModel.put(Category.CATEGORY, category);
 
-            final JSONObject preference = preferenceQueryService.getPreference();
+            final JSONObject preference = optionQueryService.getPreference();
             final int pageSize = preference.getInt(Option.ID_C_ARTICLE_LIST_DISPLAY_COUNT);
             final String categoryId = category.optString(Keys.OBJECT_ID);
 
             final JSONObject result = articleQueryService.getCategoryArticles(categoryId, currentPageNum, pageSize);
-            final List<JSONObject> articles = (List<JSONObject>) result.opt(Article.ARTICLES);
+            final List<JSONObject> articles = (List<JSONObject>) result.opt(Keys.RESULTS);
 
             final int pageCount = result.optJSONObject(Pagination.PAGINATION).optInt(Pagination.PAGINATION_PAGE_COUNT);
             if (0 == pageCount) {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND);
+                context.sendError(HttpServletResponse.SC_NOT_FOUND);
 
                 return;
             }
 
-            Skins.fillLangs(preference.optString(Option.ID_C_LOCALE_STRING), (String) request.getAttribute(Keys.TEMAPLTE_DIR_NAME), dataModel);
-
-            final boolean hasMultipleUsers = userQueryService.hasMultipleUsers();
-            if (hasMultipleUsers) {
-                filler.setArticlesExProperties(request, articles, preference);
-            } else {
-                // All articles composed by the same author
-                final JSONObject author = articleQueryService.getAuthor(articles.get(0));
-
-                filler.setArticlesExProperties(request, articles, author, preference);
-            }
+            Skins.fillLangs(preference.optString(Option.ID_C_LOCALE_STRING), (String) context.attr(Keys.TEMAPLTE_DIR_NAME), dataModel);
+            dataModelService.setArticlesExProperties(context, articles, preference);
 
             final List<Integer> pageNums = (List) result.optJSONObject(Pagination.PAGINATION).opt(Pagination.PAGINATION_PAGE_NUMS);
-
             fillPagination(dataModel, pageCount, currentPageNum, articles, pageNums);
-            dataModel.put(Common.PATH, "/category/" + URLEncoder.encode(categoryURI, "UTF-8"));
+            dataModel.put(Common.PATH, "/category/" + URLs.encode(categoryURI));
 
-            filler.fillSide(request, dataModel, preference);
-            filler.fillBlogHeader(request, response, dataModel, preference);
-            filler.fillBlogFooter(request, dataModel, preference);
+            dataModelService.fillCommon(context, dataModel, preference);
+            dataModelService.fillFaviconURL(dataModel, preference);
+            dataModelService.fillUsite(dataModel);
 
-            statisticMgmtService.incBlogViewCount(request, response);
+            statisticMgmtService.incBlogViewCount(context, response);
         } catch (final ServiceException | JSONException e) {
             LOGGER.log(Level.ERROR, e.getMessage(), e);
 
-            try {
-                response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            } catch (final IOException ex) {
-                LOGGER.error(ex.getMessage());
-            }
+            context.sendError(HttpServletResponse.SC_NOT_FOUND);
         }
     }
 

@@ -1,6 +1,6 @@
 /*
  * Solo - A small and beautiful blogging system written in Java.
- * Copyright (c) 2010-2018, b3log.org & hacpai.com
+ * Copyright (c) 2010-present, b3log.org
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -18,40 +18,33 @@
 package org.b3log.solo.cache;
 
 import org.b3log.latke.Keys;
-import org.b3log.latke.cache.Cache;
-import org.b3log.latke.cache.CacheFactory;
-import org.b3log.latke.ioc.inject.Named;
-import org.b3log.latke.ioc.inject.Singleton;
+import org.b3log.latke.ioc.Singleton;
 import org.b3log.latke.model.Role;
-import org.b3log.latke.model.User;
-import org.b3log.solo.util.JSONs;
+import org.b3log.solo.util.Solos;
 import org.json.JSONObject;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * User cache.
  *
  * @author <a href="http://88250.b3log.org">Liang Ding</a>
- * @version 1.1.0.0, Aug 27, 2017
+ * @version 1.1.0.2, Mar 3, 2019
  * @since 2.3.0
  */
-@Named
 @Singleton
 public class UserCache {
 
     /**
      * Id, User.
      */
-    private Cache idCache = CacheFactory.getCache(User.USERS + "ID");
-
-    /**
-     * Email, User.
-     */
-    private Cache emailCache = CacheFactory.getCache(User.USERS + "Email");
+    private final Map<String, JSONObject> idCache = new ConcurrentHashMap<>();
 
     /**
      * Admin user.
      */
-    private Cache adminCache = CacheFactory.getCache("adminUser");
+    private final Map<String, JSONObject> adminCache = new ConcurrentHashMap<>();
 
     /**
      * Gets the admin user.
@@ -83,22 +76,7 @@ public class UserCache {
             return null;
         }
 
-        return JSONs.clone(user);
-    }
-
-    /**
-     * Gets a user by the specified user email.
-     *
-     * @param userEmail the specified user email
-     * @return user, returns {@code null} if not found
-     */
-    public JSONObject getUserByEmail(final String userEmail) {
-        final JSONObject user = emailCache.get(userEmail);
-        if (null == user) {
-            return null;
-        }
-
-        return JSONs.clone(user);
+        return Solos.clone(user);
     }
 
     /**
@@ -107,8 +85,7 @@ public class UserCache {
      * @param user the specified user
      */
     public void putUser(final JSONObject user) {
-        idCache.put(user.optString(Keys.OBJECT_ID), JSONs.clone(user));
-        emailCache.put(user.optString(User.USER_EMAIL), JSONs.clone(user));
+        idCache.put(user.optString(Keys.OBJECT_ID), Solos.clone(user));
     }
 
     /**
@@ -123,8 +100,13 @@ public class UserCache {
         }
 
         idCache.remove(id);
+    }
 
-        final String email = user.optString(User.USER_EMAIL);
-        emailCache.remove(email);
+    /**
+     * Clears all cached data.
+     */
+    public void clear() {
+        idCache.clear();
+        adminCache.clear();
     }
 }
